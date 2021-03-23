@@ -1,0 +1,6 @@
+type ExampleEntity @entity {
+  id: ID!
+  count: BigInt!
+  ethToReward: BigInt! # uint256
+  usdtToReward: BigInt! # uint256
+}

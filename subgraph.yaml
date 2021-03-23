@@ -1,0 +1,47 @@
+specVersion: 0.0.1
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum/contract
+    name: Contract
+    network: goerli
+    source:
+      address: "0x396319aca2f16aCAc61807461Ed3d39e6E102930"
+      abi: Contract
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.2
+      language: wasm/assemblyscript
+      entities:
+        - AdminDistributeReward
+        - OwnershipTransferred
+        - Pause
+        - StakBankConfigurationChanged
+        - Unpause
+        - UserStaked
+        - UserUnstakedAll
+        - UserUnstakedWithId
+        - UserWithdrawedReward
+      abis:
+        - name: Contract
+          file: ./abis/Contract.json
+      eventHandlers:
+        - event: AdminDistributeReward(uint256,uint256)
+          handler: handleAdminDistributeReward
+        - event: OwnershipTransferred(indexed address,indexed address)
+          handler: handleOwnershipTransferred
+        - event: Pause()
+          handler: handlePause
+        - event: StakBankConfigurationChanged(indexed address,uint256)
+          handler: handleStakBankConfigurationChanged
+        - event: Unpause()
+          handler: handleUnpause
+        - event: UserStaked(indexed address,indexed uint256,uint256,uint256)
+          handler: handleUserStaked
+        - event: UserUnstakedAll(indexed address)
+          handler: handleUserUnstakedAll
+        - event: UserUnstakedWithId(indexed address,indexed uint256,uint256,uint256)
+          handler: handleUserUnstakedWithId
+        - event: UserWithdrawedReward(indexed address,uint256,uint256)
+          handler: handleUserWithdrawedReward
+      file: ./src/mapping.ts
