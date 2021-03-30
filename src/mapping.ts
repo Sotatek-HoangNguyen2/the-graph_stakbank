@@ -1,4 +1,4 @@
-import { BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts"
+import { BigInt, Bytes, ethereum, store } from "@graphprotocol/graph-ts"
 import {
   Contract,
   AdminDistributeReward,
@@ -9,63 +9,19 @@ import {
   UserStaked,
   UserUnstakedAll,
   UserUnstakedWithId,
-  UserWithdrawedReward
+  UserWithdrawedReward,
+  StakeCall__Inputs
 } from "../generated/Contract/Contract"
-import { Transaction, Stake, User } from "../generated/schema"
-
-//An effort to prevent the "duplicate of code" but fail
-//If there is a solution please tell me :D
-
-// function storeTransaction(
-//   event: UserStaked | UserUnstakedWithId | UserUnstakedAll | UserWithdrawedReward,
-//   type : string) : void 
-// {    
-//   let trans = new Transaction(event.transaction.hash.toHex());
-
-//   let user : Bytes;
-//   let requestId : BigInt;
-//   let amount : BigInt;
-//   let ethReward : BigInt;
-//   let usdtReward : BigInt;
-
-//   if (event instanceof UserStaked) {
-//     requestId = event.params.requestId;
-//     amount = event.params.amount;
-//   }
-//   if (event instanceof UserUnstakedWithId) {
-//     requestId = event.params.requestId;
-//     ethReward = event.params.ethReward;
-//     usdtReward = event.params.usdtReward;
-//   }
-//   if (event instanceof UserWithdrawedReward) {
-//     ethReward = event.params.ethReward; 
-//     usdtReward = event.params.usdtReward;
-//   }
-//   user = event.params.user;
-
-//   trans.stake_id = requestId;
-//   trans.type = type;
-//   trans.purchaser = user;
-//   trans.beneficiary = user;
-//   trans.amount = amount;
-//   trans.eth_reward = ethReward;
-//   trans.usdt_reward = usdtReward;
-//   trans.transaction_hash = event.transaction.hash;
-
-//   trans.save();
-// }
+import { Transaction, Stake, User, Log, UnstakeHistory } from "../generated/schema"
 
 export function handleAdminDistributeReward(
   event: AdminDistributeReward
 ): void {
+  const tx_hash = event.transaction.hash.toHex();
   //Create transaction   
   let trans = new Transaction(tx_hash);
 
-  trans.stake_id = stake_id;
-  trans.type = "stake";
-  trans.purchaser = user;
-  trans.beneficiary = user;
-  trans.amount = amount;
+  trans.type = "distribute";
   trans.transaction_hash = tx_hash;
 
   trans.save();
@@ -77,74 +33,90 @@ export function handleUserStaked(event: UserStaked): void {
   //Prepare params
   const data = event.params;
 
-  const tx_hash = event.transaction.hash.toHex();
-  const stake_id = data.requestId;
-  const user = data.user;
+  const tx_hash = event.transaction.hash.toHex(); //Bytes to String
+  const requestId = data.requestId;
+  const user_address = data.user.toHex();
   const stake_time = data.timestamp;
   const amount = data.amount;
 
-  //Stake is create with the id matched with requestId on SC
-  let stake = new Stake(stake_id.toHex());
+  //StakeId is create with the "user_address + stake_id"
+  //As stake_id is count from 1 for each user, taking it only
+  //representation for  id of StakeEntity is not possible
+  const stake_entity_id = requestId.toString() + "_" + user_address;
+  let stake = new Stake(stake_entity_id);
 
-  stake.stake_id = stake_id;
-  stake.user = user;
+  stake.stake_id = requestId;
+  stake.user = user_address;
   stake.is_unstaked = false;
   stake.stake_time = stake_time;
   stake.amount = amount;
   
   stake.save();
 
+  //Check user
+  let user = User.load(user_address);
+  if(user == null){
+    user = new User(user_address);
+    user.address = user_address; 
+    user.stakes = [stake_entity_id];      
+  }else{
+    const mirrorStakes = user.stakes;
+    mirrorStakes.push(stake_entity_id);
+    user.stakes = mirrorStakes;
+  }
+  user.save(); 
+
   //Create transaction   
   //Id of a trans is taken with the transaction hash
   let trans = new Transaction(tx_hash);
 
-  trans.stake_id = stake_id;
+  trans.stake_id = requestId;
   trans.type = "stake";
-  trans.purchaser = user;
-  trans.beneficiary = user;
+  trans.purchaser = user_address;
+  trans.beneficiary = user_address;
   trans.amount = amount;
   trans.transaction_hash = tx_hash;
 
   trans.save();
 }
 
-export function handleUserUnstakedAll(event: UserUnstakedAll): void {
-  // const id = event.params.user.toHex();
-
-  // const user = U
-}
-
 export function handleUserUnstakedWithId(event: UserUnstakedWithId): void { 
-  //Create stake
-  const tx_hash = event.transaction.hash.toHex();
-
+  //Preapre params
   const data = event.params;
   const requestId = data.requestId;
-  const user = data.user;
+  const user_address = data.user.toHex();
   const ethReward = data.ethReward;
   const usdtReward = data.usdtReward;
 
-  let stake = Stake.load(requestId.toHex());
+  //Check if stake is null from DB
+  //if yes, create a new stake
+  const stake_entity_id = requestId.toString() + "_" + user_address;
 
-  if(!stake){
-    stake = new Stake(requestId.toHex());
+  let stake = Stake.load(stake_entity_id);
+  
+  historify(stake, 'UNSTAKE');
+  //Remove the "removed" stake from the user's stake list
+  const user = User.load(user_address);
 
-    stake.stake_id = requestId;
-    stake.user = user;
-    stake.eth_reward = ethReward;
-    stake.usdt_reward = usdtReward;
+  let mirrorStakes = user.stakes;
+  let idxToRemove = mirrorStakes.indexOf(stake_entity_id);
+  // only remove if the revokedSender exists
+  if (idxToRemove > -1) {
+    mirrorStakes.splice(idxToRemove, 1);
+    user.stakes = mirrorStakes
+    user.save()
+  }else{
+    log('FAIL', "Remove stake_entity_id fails", "UNSTAKE");
   }
 
-  stake.is_unstaked = true;
-  stake.save();
-
   //Create transaction   
+  const tx_hash = event.transaction.hash.toHex();
   let trans = new Transaction(tx_hash);
 
   trans.stake_id = requestId;
-  trans.type = "stake";
-  trans.purchaser = user;
-  trans.beneficiary = user;
+  trans.type = "unstake";
+  trans.purchaser = user_address;
+  trans.beneficiary = user_address;
   trans.eth_reward = ethReward;
   trans.usdt_reward = ethReward;
   trans.transaction_hash = tx_hash;
@@ -152,17 +124,79 @@ export function handleUserUnstakedWithId(event: UserUnstakedWithId): void {
   trans.save();
 }
 
-export function handleUserWithdrawedReward(event: UserWithdrawedReward): void {
-  const id = event.transaction.hash.toHex();
+export function handleUserUnstakedAll(event: UserUnstakedAll): void {
+  const user_address = event.params.user.toHex();
+  const user = User.load(user_address);
+  const stakes = user.stakes;
 
-  let trans = new Transaction(id);
+  stakes.forEach(stake_entity_id => {    
+    const stake = Stake.load(stake_entity_id);
+    
+    historify(stake, 'UNSTAKE_ALL');
+  });
+
+  //Clean stakes record
+  user.stakes = [];
+  user.save();
+
+  //Create transaction   
+  //Id of a trans is taken with the transaction hash
+  const tx_hash = event.transaction.hash.toHex();
+  let trans = new Transaction(tx_hash);
+
+  trans.type = "unstake_all";
+  trans.purchaser = user_address;
+  trans.beneficiary = user_address;
+  trans.transaction_hash = tx_hash;
+
+  trans.save();
+}
+
+export function handleUserWithdrawedReward(event: UserWithdrawedReward): void {
+  const tx_hash = event.transaction.hash.toHex();
+
+  let trans = new Transaction(tx_hash);
 
   trans.type = "claim_reward";
   trans.eth_reward = event.params.ethReward;
   trans.usdt_reward = event.params.usdtReward;
-  trans.transaction_hash = id;
+  trans.transaction_hash = tx_hash;
 
   trans.save();
+}
+
+//This function is used to store a record into log table
+//as sub-graph at the moment can not log
+function log(id : string, message : string, func : string):void{
+  const log = new Log(id);
+  log.message = message;
+  log.func = func;
+  log.save();
+}
+
+//Delete a record in the Stake table and save it to UnstakeHistory table
+function historify(father : Stake | null, processor : string): void{
+
+  if(father == null){
+    log('ERROR', 'FATHER IS NULL', processor);
+  }else{
+    let son_id : string;
+    son_id = father.id + father.stake_time.toString();
+    
+    const son = new UnstakeHistory(son_id);
+
+    son.stake_id = father.stake_id;
+    son.user = father.user;
+    son.is_unstaked = true;
+    son.stake_time = father.stake_time;
+    son.amount = father.amount;
+    son.eth_reward = father.eth_reward;
+    son.usdt_reward = father.usdt_reward;
+
+    log('REMOVE', 'Removing stake: ' + father.id, 'historify');
+    store.remove('Stake', father.id); //Can not remove (ISSUE)
+    son.save();
+  }  
 }
 
 // export function handleOwnershipTransferred(event: OwnershipTransferred): void {}
@@ -237,4 +271,46 @@ export function handleUserWithdrawedReward(event: UserWithdrawedReward): void {
 //   // - contract.token(...)
 //   // - contract.totalStaked(...)
 //   // - contract.usdt(...)
+// }
+
+//An effort to prevent the "duplicate of code" but fail
+//If there is a solution please tell me :D
+
+// function storeTransaction(
+//   event: UserStaked | UserUnstakedWithId | UserUnstakedAll | UserWithdrawedReward,
+//   type : string) : void 
+// {    
+//   let trans = new Transaction(event.transaction.hash.toHex());
+
+//   let user : Bytes;
+//   let requestId : BigInt;
+//   let amount : BigInt;
+//   let ethReward : BigInt;
+//   let usdtReward : BigInt;
+
+//   if (event instanceof UserStaked) {
+//     requestId = event.params.requestId;
+//     amount = event.params.amount;
+//   }
+//   if (event instanceof UserUnstakedWithId) {
+//     requestId = event.params.requestId;
+//     ethReward = event.params.ethReward;
+//     usdtReward = event.params.usdtReward;
+//   }
+//   if (event instanceof UserWithdrawedReward) {
+//     ethReward = event.params.ethReward; 
+//     usdtReward = event.params.usdtReward;
+//   }
+//   user = event.params.user;
+
+//   trans.stake_id = requestId;
+//   trans.type = type;
+//   trans.purchaser = user;
+//   trans.beneficiary = user;
+//   trans.amount = amount;
+//   trans.eth_reward = ethReward;
+//   trans.usdt_reward = usdtReward;
+//   trans.transaction_hash = event.transaction.hash;
+
+//   trans.save();
 // }

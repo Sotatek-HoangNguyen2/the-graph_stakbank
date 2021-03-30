@@ -1,31 +1,57 @@
 
-
 enum TransactionType {
   stake,
   unstake,
   unstake_all,
   claim_reward,
+  distribute,
 }
 
 type Transaction @entity {
   id: ID!
   stake_id: BigInt
   type: TransactionType
-  purchaser: Bytes
-  beneficiary: Bytes
+  purchaser: String
+  beneficiary: String
   amount: BigInt
   eth_reward: BigInt 
   usdt_reward: BigInt 
   transaction_hash: String
 }
 
+type User @entity {
+  id: ID!
+  address: String
+  stakes: [String!]
+}
+
 type Stake @entity {
   id: ID!
   stake_id: BigInt
-  user: Bytes
+  user: String
   is_unstaked: Boolean
   stake_time: BigInt
   amount: BigInt
   eth_reward: BigInt 
   usdt_reward: BigInt 
 }
+
+type UnstakeHistory @entity {
+  id: ID!
+  stake_id: BigInt
+  user: String
+  is_unstaked: Boolean
+  stake_time: BigInt
+  amount: BigInt
+  eth_reward: BigInt 
+  usdt_reward: BigInt 
+}
+
+type Log @entity {
+  id: ID!
+  func: String
+  message: String
+}
+
+
+
